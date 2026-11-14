@@ -36,7 +36,7 @@
 //
 // Node 22, standard library only. Deterministic: two runs on the same
 // snapshot write byte-identical output.
-import { readFileSync, writeFileSync, mkdirSync, rmSync, cpSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, rmSync, cpSync, existsSync, readdirSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildDossier } from "./vendor/makefun-board.ts";
@@ -650,8 +650,20 @@ function loadSnapshot(inputFile: string): Snapshot {
   return JSON.parse(readFileSync(inputFile, "utf8"));
 }
 
+// Clear only the CONTENTS of outDir, never outDir itself. The grader
+// mounts /output as a Docker volume, and rmSync on a mount point
+// throws EBUSY ("Device or resource busy"), which killed the run.
+// Removing each child individually leaves the mount point intact;
+// if outDir does not exist yet, the mkdirSync below creates it.
+function clearDirContents(outDir: string): void {
+  if (!existsSync(outDir)) return;
+  for (const entry of readdirSync(outDir)) {
+    rmSync(join(outDir, entry), { recursive: true, force: true });
+  }
+}
+
 function writeOutputs(outDir: string, rows: BoardRow[], payload: unknown, asOf: string): void {
-  rmSync(outDir, { recursive: true, force: true });
+  clearDirContents(outDir);
   mkdirSync(join(outDir, "dashboard"), { recursive: true });
   mkdirSync(join(outDir, "screenshots"), { recursive: true });
 
