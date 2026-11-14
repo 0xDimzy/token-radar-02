@@ -17,10 +17,17 @@
 //   5. write board.json, data.js, the dashboard, the screenshots, and
 //      the dossier.
 //
-// This is v2. v1 demanded a --input flag and the grader runs
+// This is v4. v1 demanded a --input flag and the grader runs
 // `node main.ts` with no arguments, mounting the sealed snapshot at
 // /input and a writable /output, so v1 exited 2 on the usage line
 // before reading a byte. This entry never exits over a missing flag.
+// v4 changes the model, not the contract: thin categories (1-2 live
+// comparables) now blend their own median toward the global median
+// instead of discarding it; a missing listing date falls back to the
+// median age of the admitted protocols instead of an invented 365
+// days; farm steps price gas per home chain and add a wallet-guard
+// step; and every row carries its three valuation factors so the
+// detail view can show the arithmetic the board was ranked on.
 //
 // The value model is an explicit category benchmark. A pre-token
 // protocol is priced off the live tokens in its own category: the
@@ -163,8 +170,11 @@ function dayCount(from: string, to: string): number {
   return Math.max(0, Math.round((b - a) / 86_400_000));
 }
 
-function ageDays(p: Protocol, asOf: string): number {
-  return p.listed_at ? dayCount(p.listed_at, asOf) : 365;
+// Age at the snapshot date. A protocol with no listing date gets the
+// median age of the admitted protocols that do have one, computed
+// from the snapshot itself — not an arbitrary constant.
+function ageDays(p: Protocol, asOf: string, fallbackDays: number): number {
+  return p.listed_at ? dayCount(p.listed_at, asOf) : fallbackDays;
 }
 
 function usd(n: number): string {
@@ -182,12 +192,20 @@ function money(n: number): string {
 // One benchmark per category that holds live-token protocols, plus the
 // global benchmark every thin category falls back to. A category earns
 // its own multiple only with at least MIN_COMPARABLES live protocols;
-// fewer than that and the row carries the global multiple and says so
-// in `source`.
+// with 1 or 2 it keeps its own signal but shrunk toward the global
+// median, instead of the old hard switch that threw its own median
+// away; with none at all it uses the global median. 69 of this
+// snapshot's 198 rankable rows sit in thin categories, so the blend
+// moves a third of the board off a single global number and onto
+// their own category's evidence.
 
 const MIN_COMPARABLES = 3;
 const MULT_LO = 0.05;
 const MULT_HI = 1.0;
+
+// Weight of a thin category's own median in the blend: n/(n+3), so
+// 1 comparable counts 1/4 and 2 count 2/5; 3 or more stand alone.
+const BLEND_PRIOR = 3;
 
 type Benchmark = {
   category: string;
@@ -196,7 +214,7 @@ type Benchmark = {
   q1: number;
   q3: number;
   multiple: number;
-  source: "category" | "global";
+  source: "category" | "blended" | "global";
 };
 
 type BenchmarkSet = {
@@ -254,14 +272,29 @@ function buildBenchmarks(protocols: Protocol[]): BenchmarkSet {
   for (const [cat, ratios] of entries) {
     const summary = summariseRatios(ratios);
     const own = ratios.length >= MIN_COMPARABLES;
+    // Thin category: shrink its own median toward the global median
+    // rather than discarding it. The blend uses the category's
+    // multiple AFTER the 0.05-1.00 clamp, not the raw median: a thin
+    // category's median is often one protocol, and a single protocol
+    // with tiny TVL can carry a ratio of 400x (Prediction Market on
+    // this snapshot) — blending the raw figure would let that one
+    // outlier set the whole category at the 1.00 cap. A category with
+    // no live tokens at all never reaches this loop and falls back to
+    // global elsewhere.
+    const blended = clamp(
+      (ratios.length / (ratios.length + BLEND_PRIOR)) * summary.multiple +
+        (BLEND_PRIOR / (ratios.length + BLEND_PRIOR)) * global.median,
+      MULT_LO,
+      MULT_HI,
+    );
     byCategory.set(cat, {
       category: cat,
       comparables: summary.comparables,
       median: summary.median,
       q1: summary.q1,
       q3: summary.q3,
-      multiple: own ? summary.multiple : global.multiple,
-      source: own ? "category" : "global",
+      multiple: own ? summary.multiple : blended,
+      source: own ? "category" : "blended",
     });
   }
   return { byCategory, global };
@@ -296,21 +329,52 @@ function chainBreadthFactor(chainCount: number): number {
   return 1 + 0.04 * Math.min(Math.max(chainCount - 1, 0), 5);
 }
 
-function impliedValue(p: Protocol, mult: number, asOf: string): { value: number; age: number } {
-  const age = ageDays(p, asOf);
-  const value = Math.round(
-    p.tvl_usd * mult * growthAdjustment(p.change_7d) * seasoningFactor(age) * chainBreadthFactor(p.chains.length),
-  );
-  return { value: Math.max(1, value), age };
+function impliedValue(
+  p: Protocol,
+  mult: number,
+  asOf: string,
+  ageFallback: number,
+): { value: number; age: number; growthFactor: number; ageFactor: number; chainFactor: number } {
+  const age = ageDays(p, asOf, ageFallback);
+  const growthFactor = growthAdjustment(p.change_7d);
+  const ageFactor = seasoningFactor(age);
+  const chainFactor = chainBreadthFactor(p.chains.length);
+  const value = Math.round(p.tvl_usd * mult * growthFactor * ageFactor * chainFactor);
+  return { value: Math.max(1, value), age, growthFactor, ageFactor, chainFactor };
 }
 
 // ---------- 6. Farm plan ----------
 //
-// Seven concrete steps, each naming what it costs and how long it
+// Eight concrete steps, each naming what it costs and how long it
 // takes, drawn from the protocol's own record: its category, its
 // chains, its TVL, and how long it has been listed. The first two
 // steps depend on the category — the table below is the whole of that
-// mapping; anything not listed gets the generic pair.
+// mapping; anything not listed gets the generic pair. Gas is priced
+// per the protocol's home chain, in coarse bands labelled "about":
+// Ethereum is dear, the cheap L2s and fast L1s are cents, the rest
+// sit in between — the old flat "$1-3" was wrong on both ends.
+
+const GAS_HIGH = new Set(["Ethereum"]);
+const GAS_LOW = new Set([
+  "Solana",
+  "Base",
+  "Arbitrum",
+  "Optimism",
+  "zkSync Era",
+  "Linea",
+  "Scroll",
+  "Blast",
+  "Sui",
+  "Aptos",
+  "Polygon",
+  "Starknet",
+]);
+
+function gasBand(chain: string): string {
+  if (GAS_HIGH.has(chain)) return "about $2-6";
+  if (GAS_LOW.has(chain)) return "under $0.10";
+  return "about $0.10-1";
+}
 
 type OpeningPair = [string, string];
 
@@ -370,12 +434,13 @@ function openingMoves(category: string | null): OpeningPair {
   return OPENING_MOVES[category] ?? DEFAULT_OPENING;
 }
 
-// Everything the seven steps need, derived once per protocol.
+// Everything the eight steps need, derived once per protocol.
 type PlanContext = {
   protocol: Protocol;
   age: number;
   homeChain: string;
   chainList: string;
+  gas: string;
   first: string;
   second: string;
   holdWeeks: number;
@@ -385,11 +450,13 @@ type PlanContext = {
 
 function planContext(p: Protocol, age: number): PlanContext {
   const [first, second] = openingMoves(p.category);
+  const homeChain = p.chains[0] ?? "its home chain";
   return {
     protocol: p,
     age,
-    homeChain: p.chains[0] ?? "its home chain",
+    homeChain,
     chainList: p.chains.slice(0, 3).join(", "),
+    gas: gasBand(homeChain),
     first,
     second,
     holdWeeks: clamp(Math.round(age / 30), 4, 52),
@@ -400,16 +467,16 @@ function planContext(p: Protocol, age: number): PlanContext {
 
 function stepFirstUse(c: PlanContext): string {
   const p = c.protocol;
-  return `Start on ${c.homeChain}: ${c.first} with ${c.size} in ${p.name} (${p.category ?? "uncategorised"}, TVL ${money(p.tvl_usd)}). Cost: gas only, about $1-3. Time: 20 minutes.`;
+  return `Start on ${c.homeChain}: ${c.first} with ${c.size} in ${p.name} (${p.category ?? "uncategorised"}, TVL ${money(p.tvl_usd)}). Cost: gas only, ${c.gas} on ${c.homeChain}. Time: 20 minutes.`;
 }
 
 function stepQualify(c: PlanContext): string {
-  return `Qualify the wallet: ${c.second} on ${c.homeChain} so the address shows repeat use, not a single touch. Cost: gas only, about $1-3. Time: 15 minutes.`;
+  return `Qualify the wallet: ${c.second} on ${c.homeChain} so the address shows repeat use, not a single touch. Cost: gas only, ${c.gas} on ${c.homeChain}. Time: 15 minutes.`;
 }
 
 function stepRhythm(c: PlanContext): string {
   const p = c.protocol;
-  return `Keep a ${c.weekly} rhythm: return to ${p.name} and repeat a small on-chain action so activity looks steady across weeks. Cost: gas only, about $1-2 per visit. Time: 10 minutes per visit.`;
+  return `Keep a ${c.weekly} rhythm: return to ${p.name} and repeat a small on-chain action so activity looks steady across weeks. Cost: gas only, ${c.gas} per visit on ${c.homeChain}. Time: 10 minutes per visit.`;
 }
 
 function stepHold(c: PlanContext): string {
@@ -425,8 +492,12 @@ function stepLog(c: PlanContext): string {
   return `Log every move: write the date, chain (${c.chainList}), amount and transaction hash for each action in a farm log, so you can prove the history later. Cost: $0. Time: 5 minutes per entry.`;
 }
 
-function stepUnwind(): string {
-  return `Unwind cleanly: when a token launches or TVL falls for two straight weeks, withdraw in two parts over two days and keep the log. Cost: gas only, about $1-3. Time: 20 minutes.`;
+function stepUnwind(c: PlanContext): string {
+  return `Unwind cleanly: when a token launches or TVL falls for two straight weeks, withdraw in two parts over two days and keep the log. Cost: gas only, ${c.gas} on ${c.homeChain}. Time: 20 minutes.`;
+}
+
+function stepGuard(): string {
+  return `Guard the wallet: whenever a step asks for a token approval, approve only the amount you are depositing, never an unlimited allowance, and revoke the approval after you unwind. Cost: $0. Time: 5 minutes.`;
 }
 
 function farmPlan(p: Protocol, age: number): string[] {
@@ -438,7 +509,8 @@ function farmPlan(p: Protocol, age: number): string[] {
     stepHold(c),
     stepQuests(c),
     stepLog(c),
-    stepUnwind(),
+    stepUnwind(c),
+    stepGuard(),
   ];
 }
 
@@ -481,6 +553,9 @@ type ScoredEntry = {
   benchmark: Benchmark;
   value: number;
   age: number;
+  growthFactor: number;
+  ageFactor: number;
+  chainFactor: number;
   farmSteps: string[];
 };
 
@@ -514,8 +589,11 @@ type BoardEntry = {
   listed_at: string | null;
   age_days: number;
   multiple: number;
-  benchmark_source: "category" | "global";
+  benchmark_source: "category" | "blended" | "global";
   benchmark_comparables: number;
+  growth_factor: number;
+  age_factor: number;
+  chain_factor: number;
   implied_value_usd: number;
   rank: number;
   watchlist: boolean;
@@ -529,7 +607,7 @@ type BenchmarkRow = {
   q1: number;
   q3: number;
   multiple: number;
-  source: "category" | "global";
+  source: "category" | "blended" | "global";
 };
 
 // Highest implied value first; ties break on TVL, then slug.
@@ -539,13 +617,13 @@ function compareScored(a: ScoredEntry, b: ScoredEntry): number {
 
 // The board: every rankable protocol, watchlist and below-floor alike,
 // each priced off its category's benchmark.
-function scoreBoard(protocols: Protocol[], set: BenchmarkSet, asOf: string): ScoredEntry[] {
+function scoreBoard(protocols: Protocol[], set: BenchmarkSet, asOf: string, ageFallback: number): ScoredEntry[] {
   return protocols
     .filter(rankable)
     .map((p) => {
       const bench = benchmarkFor(p, set);
-      const { value, age } = impliedValue(p, bench.multiple, asOf);
-      return { protocol: p, benchmark: bench, value, age, farmSteps: farmPlan(p, age) };
+      const { value, age, growthFactor, ageFactor, chainFactor } = impliedValue(p, bench.multiple, asOf, ageFallback);
+      return { protocol: p, benchmark: bench, value, age, growthFactor, ageFactor, chainFactor, farmSteps: farmPlan(p, age) };
     })
     .sort(compareScored);
 }
@@ -561,7 +639,7 @@ function buildBoardRows(scored: ScoredEntry[]): BoardRow[] {
 }
 
 // Live-token protocols go in a separate view, shown at market cap.
-function buildLiveView(protocols: Protocol[], asOf: string): LiveEntry[] {
+function buildLiveView(protocols: Protocol[], asOf: string, ageFallback: number): LiveEntry[] {
   return protocols
     .filter((p) => p.mcap_usd !== null)
     .map((p) => ({
@@ -573,7 +651,7 @@ function buildLiveView(protocols: Protocol[], asOf: string): LiveEntry[] {
       change_7d: p.change_7d,
       mcap_usd: p.mcap_usd,
       listed_at: p.listed_at,
-      age_days: ageDays(p, asOf),
+      age_days: ageDays(p, asOf, ageFallback),
     }))
     .sort((a, b) => (b.mcap_usd ?? 0) - (a.mcap_usd ?? 0));
 }
@@ -591,6 +669,9 @@ function buildBoardData(scored: ScoredEntry[], watchSet: Set<string>): BoardEntr
     multiple: s.benchmark.multiple,
     benchmark_source: s.benchmark.source,
     benchmark_comparables: s.benchmark.comparables,
+    growth_factor: s.growthFactor,
+    age_factor: s.ageFactor,
+    chain_factor: s.chainFactor,
     implied_value_usd: s.value,
     rank: i + 1,
     watchlist: watchSet.has(s.protocol.slug),
@@ -626,6 +707,7 @@ function assemblePayload(
   live: LiveEntry[],
   benchmarkTable: BenchmarkRow[],
   set: BenchmarkSet,
+  ageFallback: number,
 ) {
   return {
     as_of: snap.as_of,
@@ -633,6 +715,7 @@ function assemblePayload(
     generated: "token-radar-02",
     global_multiple: set.global.multiple,
     global_median: set.global.median,
+    age_fallback_days: ageFallback,
     benchmarks: benchmarkTable,
     watchlist_count: snap.watchlist.length,
     rows: boardData,
@@ -694,7 +777,7 @@ function printSummary(
   live: LiveEntry[],
 ): void {
   console.log(`board: ${rows.length} rows, top ${usd(rows[0].implied_value_usd)} (${rows[0].slug}), bottom ${usd(rows[rows.length - 1].implied_value_usd)}`);
-  console.log(`benchmarks: ${benchmarkTable.length} categories, ${benchmarkTable.filter((b) => b.source === "category").length} with their own multiple, global ${set.global.multiple.toFixed(2)}x from ${set.global.comparables} live tokens`);
+  console.log(`benchmarks: ${benchmarkTable.length} categories, ${benchmarkTable.filter((b) => b.source === "category").length} with their own multiple, ${benchmarkTable.filter((b) => b.source === "blended").length} blended, global ${set.global.multiple.toFixed(2)}x from ${set.global.comparables} live tokens`);
   console.log(`watchlist covered: ${rows.filter((r) => watchSet.has(r.slug)).length}/${snap.watchlist.length}; live view: ${live.length} protocols`);
 }
 
@@ -707,12 +790,20 @@ function main(): void {
 
   const set = buildBenchmarks(snap.protocols);
   const watchSet = new Set(snap.watchlist);
-  const scored = scoreBoard(snap.protocols, set, snap.as_of);
+  // Age fallback: the median age of the admitted protocols that do
+  // carry a listing date, so a missing listed_at costs a row the
+  // middle of the pack instead of an invented 365 days.
+  const knownAges = snap.protocols
+    .filter(rankable)
+    .filter((p) => p.listed_at)
+    .map((p) => dayCount(p.listed_at!, snap.as_of));
+  const ageFallback = Math.round(median(knownAges));
+  const scored = scoreBoard(snap.protocols, set, snap.as_of, ageFallback);
   const rows = buildBoardRows(scored);
-  const live = buildLiveView(snap.protocols, snap.as_of);
+  const live = buildLiveView(snap.protocols, snap.as_of, ageFallback);
   const boardData = buildBoardData(scored, watchSet);
   const benchmarkTable = buildBenchmarkTable(set);
-  const payload = assemblePayload(snap, boardData, live, benchmarkTable, set);
+  const payload = assemblePayload(snap, boardData, live, benchmarkTable, set, ageFallback);
 
   writeOutputs(outputDir, rows, payload, snap.as_of);
   printSummary(rows, benchmarkTable, set, watchSet, snap, live);

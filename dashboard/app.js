@@ -223,8 +223,9 @@
   }
 
   function boardRow(r) {
-    var src = r.benchmark_source === "category" ? "cat." : "glob.";
-    return "<tr data-slug='" + esc(r.slug) + "'><td class='num'>#" + r.rank + "</td>" +
+    var src = r.benchmark_source === "category" ? "cat." : r.benchmark_source === "blended" ? "blend." : "glob.";
+    var top = r.rank <= 3 ? " class='top3'" : "";
+    return "<tr data-slug='" + esc(r.slug) + "'" + top + "><td class='num'>#" + r.rank + "</td>" +
       "<td><b>" + esc(r.name) + "</b>" + (r.watchlist ? watchBadge() : "") +
       "<br>" + mutedSlug(r.slug) + "</td>" +
       "<td>" + esc(r.category || "—") + "</td>" +
@@ -248,18 +249,19 @@
   }
 
   // The multiple the board actually uses for a benchmark row: the
-  // category median when the category has enough comparables, else the
+  // category median when the category has enough comparables, a blend
+  // of its own median and the global median when it has 1-2, else the
   // global median, labelled so the fallback is visible.
   function usedMultipleMini(b) {
-    return b.source === "category"
-      ? b.multiple.toFixed(2) + "×"
-      : snapshot.global_multiple.toFixed(2) + "× (global)";
+    if (b.source === "category") return b.multiple.toFixed(2) + "×";
+    if (b.source === "blended") return b.multiple.toFixed(2) + "× (blended)";
+    return snapshot.global_multiple.toFixed(2) + "× (global)";
   }
 
   function usedMultipleFull(b) {
-    return b.source === "category"
-      ? b.multiple.toFixed(2) + "×"
-      : snapshot.global_multiple.toFixed(2) + "× (global fallback)";
+    if (b.source === "category") return b.multiple.toFixed(2) + "×";
+    if (b.source === "blended") return b.multiple.toFixed(2) + "× (blended)";
+    return snapshot.global_multiple.toFixed(2) + "× (global fallback)";
   }
 
   function benchMiniRow(b) {
@@ -307,6 +309,7 @@
     var rows = snapshot.benchmarks.map(benchFullRow);
     rows.push(globalBenchRow());
     byId("compsrows").innerHTML = rows.join("");
+    byId("agefallback").textContent = snapshot.age_fallback_days + " days";
   }
 
   function growthLabel(row) {
@@ -319,8 +322,31 @@
       return "Category benchmark: the median mcap / TVL of the " + row.benchmark_comparables +
         " live tokens in " + (row.category || "its category") + ".";
     }
-    return "Thin category: fewer than 3 live tokens, so this row uses the global median mcap / TVL of all " +
+    if (row.benchmark_source === "blended") {
+      return "Blended benchmark: only " + row.benchmark_comparables +
+        " live token" + (row.benchmark_comparables === 1 ? "" : "s") + " in " +
+        (row.category || "its category") + ", so its own median is shrunk toward the global median (weight " +
+        row.benchmark_comparables + "/" + (row.benchmark_comparables + 3) + ").";
+    }
+    return "Thin category: no live tokens, so this row uses the global median mcap / TVL of all " +
       snapshot.live.length + " live tokens.";
+  }
+
+  // The factor breakdown: every number that goes into the implied
+  // value, so the detail view shows the multiplication the board was
+  // ranked on instead of just stating the result.
+  function factorRows(row) {
+    var f = [
+      ["TVL", fmtTvl(row.tvl_usd), "the protocol's locked value at the snapshot"],
+      ["Category multiple", row.multiple.toFixed(3) + "× (" + row.benchmark_source + ")", "median mcap / TVL of live tokens in " + (row.category || "its category")],
+      ["Growth factor", row.growth_factor.toFixed(3) + "×", "7-day TVL change " + growthLabel(row) + ", weighted 0.6"],
+      ["Age factor", row.age_factor.toFixed(3) + "×", row.age_days + " days listed, 0.70 + 0.30 × age capped at 1095 days"],
+      ["Chain factor", row.chain_factor.toFixed(3) + "×", row.chains.length + (row.chains.length === 1 ? " chain" : " chains") + ", +4% per extra chain capped at 5"],
+      ["Implied value", fmtUsd(row.implied_value_usd), "TVL × multiple × growth × age × chains"]
+    ];
+    return f.map(function (r) {
+      return "<tr><td>" + esc(r[0]) + "</td><td class='num'><b>" + esc(r[1]) + "</b></td><td>" + esc(r[2]) + "</td></tr>";
+    }).join("");
   }
 
   function detailStats(row) {
@@ -356,7 +382,9 @@
       row.chains.length + " " + chainWord + "). " + benchmarkNote(row) +
       " The record shows no token — market cap, CoinGecko id and symbol are all null.</p>" +
       detailCheckBanner(row, again, ok) +
-      "<h3>Farm plan — 7 steps</h3><ol class='steps'>" +
+      "<h3>How the value is built</h3><table class='factors'><thead><tr><th>Factor</th><th>Value</th><th>Where it comes from</th></tr></thead><tbody>" +
+      factorRows(row) + "</tbody></table>" +
+      "<h3>Farm plan — 8 steps</h3><ol class='steps'>" +
       row.farm_steps.map(function (s) { return "<li>" + esc(s) + "</li>"; }).join("") + "</ol></div>";
   }
 

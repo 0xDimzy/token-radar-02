@@ -59,7 +59,7 @@
     <section id="view-board">
       <div class="bench-strip" id="bench-strip">
         <h2>Category benchmarks — median mcap / TVL of live tokens</h2>
-        <p class="bench-note">Each pre-token protocol is priced off its own category's benchmark below. Categories with fewer than 3 live tokens use the global median instead.</p>
+        <p class="bench-note">Each pre-token protocol is priced off its own category's benchmark below. Categories with 1–2 live tokens blend their own median toward the global median; categories with none use the global median.</p>
         <table id="benchmini">
           <thead>
             <tr>
@@ -132,8 +132,8 @@
       <p>Each pre-token protocol's implied value comes only from the sealed snapshot's own figures — no outside prices, no hand-kept list of names:</p>
       <ol class="method">
         <li><b>Admit.</b> A protocol is rankable when its record shows no token at all (market cap, CoinGecko id and symbol all null) and it is not a wrapped, staked or bridged product, not a versioned pool, and not an exchange. The snapshot's 40-protocol watchlist is the floor; the same rule admits the early protocols below the $50m floor too.</li>
-        <li><b>Benchmark.</b> For each category, take the median of market-cap ÷ TVL across the live-token protocols in that category — at least 3 comparables, otherwise the global median across all live tokens. Clamp the multiple to 0.05–1.00. The table below shows every category's median, its first and third quartiles, and how many live tokens set it.</li>
-        <li><b>Implied value.</b> TVL × category multiple × (1 + 0.6 × 7-day change, clamped to −50%…+100%) × (0.70 + 0.30 × age in days capped at 1095 ÷ 1095) × (1 + 0.04 × extra chains, capped at 5). Age runs from the listing date to the snapshot date, 2026-11-14, or 365 days when no listing date is recorded.</li>
+        <li><b>Benchmark.</b> For each category, take the median of market-cap ÷ TVL across the live-token protocols in that category — at least 3 comparables, otherwise blend: a category with 1–2 live tokens keeps its own median shrunk toward the global median (weight n ÷ (n + 3)), and a category with none uses the global median across all live tokens. Clamp the multiple to 0.05–1.00. The table below shows every category's median, its first and third quartiles, and how many live tokens set it.</li>
+        <li><b>Implied value.</b> TVL × category multiple × (1 + 0.6 × 7-day change, clamped to −50%…+100%) × (0.70 + 0.30 × age in days capped at 1095 ÷ 1095) × (1 + 0.04 × extra chains, capped at 5). Age runs from the listing date to the snapshot date, 2026-11-14, or the median age of the admitted protocols (<span id="agefallback"></span>) when no listing date is recorded. The detail view shows each factor's number for every protocol.</li>
         <li><b>Rank.</b> Sort by implied value, highest first. The board is the claim; the snapshot's record is not proof a token will ever launch.</li>
       </ol>
       <h3>Category benchmarks — median mcap / TVL of live tokens</h3>
@@ -149,7 +149,7 @@
         </thead>
         <tbody id="compsrows"></tbody>
       </table>
-      <p class="hint">Categories with fewer than 3 live protocols fall back to the global median, shown in the last row. The multiple is the median clamped to 0.05–1.00.</p>
+      <p class="hint">Categories with 1–2 live protocols blend their own median toward the global median, shown in the last row. The multiple is the median clamped to 0.05–1.00.</p>
     </section>
 
   </main>

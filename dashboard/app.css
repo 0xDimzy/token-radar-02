@@ -207,6 +207,19 @@ tbody tr:hover {
   background: var(--panel2);
 }
 
+/* The board is long; keep its header visible while scrolling. */
+#board thead th {
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  z-index: 1;
+}
+
+/* The top three rows carry a faint accent tint. */
+tr.top3 {
+  background: rgba(56, 189, 248, 0.06);
+}
+
 /* ------------------------------------------------------------------
    7. Indicators — change colours, badges, pills, hints.
    ------------------------------------------------------------------ */
@@ -356,6 +369,19 @@ tbody tr:hover {
   background: #3f0d0d;
   border: 1px solid #7f1d1d;
   color: #fca5a5;
+}
+
+/* Factor breakdown table in the detail view. */
+.factors {
+  margin-top: 6px;
+}
+
+.factors th {
+  cursor: default;
+}
+
+.factors td:first-child {
+  font-weight: 600;
 }
 
 #back {
