@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <!-- Document metadata: charset, responsive viewport, page title, stylesheet. -->
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Token Radar — pre-token protocols ranked by implied launch value</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+  <!-- ============================================================
+       Header: title, one-line explainer, and the live stat cards
+       (populated by app.js into #stats).
+       ============================================================ -->
+  <header class="top">
+    <div>
+      <h1>Token Radar</h1>
+      <p class="sub">Every pre-token protocol in the snapshot, ranked by what its launch would be worth — priced by a log-log regression of market cap on TVL over the snapshot's own live tokens, with each category's effect shrunk toward the global mean, from the snapshot's own numbers, not a hand-kept list.</p>
+    </div>
+    <div class="stats" id="stats"></div>
+  </header>
+
+  <!-- ============================================================
+       View tabs: the board, the live-token comparables, and the
+       method/benchmarks explainer. app.js toggles the sections.
+       ============================================================ -->
+  <nav class="tabs" aria-label="Views">
+    <button id="tab-pre" class="tab active" type="button">Pre-token board</button>
+    <button id="tab-live" class="tab" type="button">Live tokens</button>
+    <button id="tab-method" class="tab" type="button">Method &amp; effects</button>
+  </nav>
+
+  <!-- ============================================================
+       Board controls: free-text search, category and chain filters,
+       watchlist toggle, and the live result count.
+       ============================================================ -->
+  <section class="controls" id="controls">
+    <input id="q" type="search" placeholder="Search name or slug…" aria-label="Search protocols">
+    <select id="cat" aria-label="Category filter">
+      <option value="">All categories</option>
+    </select>
+    <select id="chain" aria-label="Chain filter">
+      <option value="">All chains</option>
+    </select>
+    <label class="watch">
+      <input id="watchonly" type="checkbox"> Watchlist only
+    </label>
+    <span class="count" id="count"></span>
+  </section>
+
+  <main>
+
+    <!-- ==========================================================
+         Board view (default): category benchmark strip on top,
+         then the ranked pre-token table. Rows are clickable and
+         open the detail view.
+         ========================================================== -->
+    <section id="view-board">
+      <div class="bench-strip" id="bench-strip">
+        <h2>Category effects — how each category shifts the regression</h2>
+        <p class="bench-note">Each pre-token protocol is priced by the regression below, shifted by its own category's effect. A category's effect is its live tokens' mean residual from the regression, shrunk toward zero by n ÷ (n + 10) — categories hold only ~3.5 live protocols, so an unshrunk mean is mostly noise. Categories with no live tokens get no effect.</p>
+        <table id="benchmini">
+          <thead>
+            <tr>
+              <th>Category</th>
+              <th>Live tokens</th>
+              <th>Raw mean residual</th>
+              <th>Effect used</th>
+            </tr>
+          </thead>
+          <tbody id="benchminirows"></tbody>
+        </table>
+      </div>
+
+      <table id="board">
+        <thead>
+          <tr>
+            <th data-sort="rank">Rank</th>
+            <th data-sort="name">Protocol</th>
+            <th data-sort="category">Category</th>
+            <th data-sort="chains">Chains</th>
+            <th data-sort="tvl_usd">TVL</th>
+            <th data-sort="change_7d">7d</th>
+            <th data-sort="age_days">Age</th>
+            <th data-sort="multiple">Multiple</th>
+            <th data-sort="implied_value_usd">Implied value</th>
+            <th>Farm plan</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <p class="hint">Click a row for the detail view — it recomputes the implied value live from the row's own figures and checks it against the board.</p>
+    </section>
+
+    <!-- ==========================================================
+         Live-token view: the comparables the board is valued
+         against, shown at market cap — never at a modelled value.
+         ========================================================== -->
+    <section id="view-live" hidden>
+      <table id="livetab">
+        <thead>
+          <tr>
+            <th data-sort="name">Protocol</th>
+            <th data-sort="category">Category</th>
+            <th data-sort="tvl_usd">TVL</th>
+            <th data-sort="mcap_usd">Market cap</th>
+            <th data-sort="mcap_usd">Mcap / TVL</th>
+            <th data-sort="age_days">Age</th>
+          </tr>
+        </thead>
+        <tbody id="liverows"></tbody>
+      </table>
+      <p class="hint">Live-token protocols are shown at their market cap, never at a modelled value. They are the comparables the regression is fit on.</p>
+    </section>
+
+    <!-- ==========================================================
+         Detail view: one protocol, recomputed live. Reached by
+         clicking a board row; #back returns to the board.
+         ========================================================== -->
+    <section id="view-detail" hidden>
+      <button id="back" type="button">← Back to board</button>
+      <div id="detail"></div>
+    </section>
+
+    <!-- ==========================================================
+         Method view: the four valuation steps, then the full
+         per-category effect table.
+         ========================================================== -->
+    <section id="view-method" hidden>
+      <h2>How the implied value is built</h2>
+      <p>Each pre-token protocol's implied value comes only from the sealed snapshot's own figures — no outside prices, no hand-kept list of names:</p>
+      <ol class="method">
+        <li><b>Admit.</b> A protocol is rankable when its record shows no token at all (market cap, CoinGecko id and symbol all null) and it is not a wrapped, staked or bridged product, not a versioned pool, and not an exchange. The snapshot's 40-protocol watchlist is the floor; the same rule admits the early protocols below the $50m floor too.</li>
+        <li><b>Regress.</b> Fit log10(market cap) = a + b · log10(TVL) by least squares over the snapshot's 128 live-token protocols (market cap and TVL both above zero). The fit is done at run time from the snapshot — no coefficient is hardcoded. On this snapshot a = <span id="ols-intercept"></span>, b = <span id="ols-slope"></span>, residual sd <span id="ols-sd"></span> dex, R² = <span id="ols-r2"></span>. The slope is below 1, so the implied multiple falls as TVL rises. Growth, age and chain count were tested in the regression and dropped: they carry no out-of-sample signal — adding them worsens the leave-one-out median error — so the value is TVL and category alone.</li>
+        <li><b>Shrink the category effect.</b> For each category, take the mean residual of its live tokens from the regression and shrink it toward zero by n ÷ (n + 10), where n is the category's live-token count. Categories hold only ~3.5 live protocols here, so an unshrunk mean is mostly noise; a category needs ten live tokens before its own effect counts at half weight, and a category with none gets no effect. The table below shows every category's raw mean residual and the shrunken effect the board uses.</li>
+        <li><b>Implied value.</b> Predicted market cap = 10^(a + b · log10(TVL) + category effect). Divide by TVL for the implied multiple and clamp it to 0.05–0.50: the cap binds only for the smallest protocols (TVL below ~$9m) and the floor only for the largest (TVL above ~$1b). Age runs from the listing date to the snapshot date, 2026-11-14, or the median age of the admitted protocols (<span id="agefallback"></span>) when no listing date is recorded; age feeds the farm plan's hold time, not the value. The detail view shows each number for every protocol.</li>
+        <li><b>Rank.</b> Sort by implied value, highest first. The board is the claim; the snapshot's record is not proof a token will ever launch.</li>
+      </ol>
+      <h3>Category effects — mean OLS residual, shrunk toward zero</h3>
+      <table id="comps">
+        <thead>
+          <tr>
+            <th>Category</th>
+            <th>Live tokens</th>
+            <th>Raw mean residual</th>
+            <th>Effect used</th>
+          </tr>
+        </thead>
+        <tbody id="compsrows"></tbody>
+      </table>
+      <p class="hint">The effect is the raw mean residual shrunk by n ÷ (n + 10). A positive effect lifts every protocol in that category above the regression line; a negative one pulls it below. Leave-one-out on the 128 live tokens: median |log10 error| 0.53 (the old category-median model: 0.73), within-2x 28.9% (18.8%), Spearman 0.43 (0.39).</p>
+    </section>
+
+  </main>
+
+  <!-- ============================================================
+       Footer: snapshot date and the count of ranked protocols.
+       ============================================================ -->
+  <footer>
+    <p>Snapshot dated <span id="asof"></span> · <span id="footcount"></span> pre-token protocols ranked · values are the entry's own model, not a prediction that a token launches.</p>
+  </footer>
+
+  <!-- Data first, then the app that renders every view above. -->
+  <script src="../data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
