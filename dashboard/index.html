@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <!-- Document metadata: charset, responsive viewport, page title, stylesheet. -->
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Token Radar — pre-token protocols ranked by implied launch value</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+  <!-- ============================================================
+       Header: title, one-line explainer, and the live stat cards
+       (populated by app.js into #stats).
+       ============================================================ -->
+  <header class="top">
+    <div>
+      <h1>Token Radar</h1>
+      <p class="sub">Every pre-token protocol in the snapshot, ranked by what its launch would be worth — priced off the live tokens in its own category, from the snapshot's own numbers, not a hand-kept list.</p>
+    </div>
+    <div class="stats" id="stats"></div>
+  </header>
+
+  <!-- ============================================================
+       View tabs: the board, the live-token comparables, and the
+       method/benchmarks explainer. app.js toggles the sections.
+       ============================================================ -->
+  <nav class="tabs" aria-label="Views">
+    <button id="tab-pre" class="tab active" type="button">Pre-token board</button>
+    <button id="tab-live" class="tab" type="button">Live tokens</button>
+    <button id="tab-method" class="tab" type="button">Method &amp; benchmarks</button>
+  </nav>
+
+  <!-- ============================================================
+       Board controls: free-text search, category and chain filters,
+       watchlist toggle, and the live result count.
+       ============================================================ -->
+  <section class="controls" id="controls">
+    <input id="q" type="search" placeholder="Search name or slug…" aria-label="Search protocols">
+    <select id="cat" aria-label="Category filter">
+      <option value="">All categories</option>
+    </select>
+    <select id="chain" aria-label="Chain filter">
+      <option value="">All chains</option>
+    </select>
+    <label class="watch">
+      <input id="watchonly" type="checkbox"> Watchlist only
+    </label>
+    <span class="count" id="count"></span>
+  </section>
+
+  <main>
+
+    <!-- ==========================================================
+         Board view (default): category benchmark strip on top,
+         then the ranked pre-token table. Rows are clickable and
+         open the detail view.
+         ========================================================== -->
+    <section id="view-board">
+      <div class="bench-strip" id="bench-strip">
+        <h2>Category benchmarks — median mcap / TVL of live tokens</h2>
+        <p class="bench-note">Each pre-token protocol is priced off its own category's benchmark below. Categories with fewer than 3 live tokens use the global median instead.</p>
+        <table id="benchmini">
+          <thead>
+            <tr>
+              <th>Category</th>
+              <th>Live tokens</th>
+              <th>Median</th>
+              <th>Multiple used</th>
+            </tr>
+          </thead>
+          <tbody id="benchminirows"></tbody>
+        </table>
+      </div>
+
+      <table id="board">
+        <thead>
+          <tr>
+            <th data-sort="rank">Rank</th>
+            <th data-sort="name">Protocol</th>
+            <th data-sort="category">Category</th>
+            <th data-sort="chains">Chains</th>
+            <th data-sort="tvl_usd">TVL</th>
+            <th data-sort="change_7d">7d</th>
+            <th data-sort="age_days">Age</th>
+            <th data-sort="multiple">Multiple</th>
+            <th data-sort="implied_value_usd">Implied value</th>
+            <th>Farm plan</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <p class="hint">Click a row for the detail view — it recomputes the implied value live from the row's own figures and checks it against the board.</p>
+    </section>
+
+    <!-- ==========================================================
+         Live-token view: the comparables the board is valued
+         against, shown at market cap — never at a modelled value.
+         ========================================================== -->
+    <section id="view-live" hidden>
+      <table id="livetab">
+        <thead>
+          <tr>
+            <th data-sort="name">Protocol</th>
+            <th data-sort="category">Category</th>
+            <th data-sort="tvl_usd">TVL</th>
+            <th data-sort="mcap_usd">Market cap</th>
+            <th data-sort="mcap_usd">Mcap / TVL</th>
+            <th data-sort="age_days">Age</th>
+          </tr>
+        </thead>
+        <tbody id="liverows"></tbody>
+      </table>
+      <p class="hint">Live-token protocols are shown at their market cap, never at a modelled value. They are the comparables the pre-token board is valued against.</p>
+    </section>
+
+    <!-- ==========================================================
+         Detail view: one protocol, recomputed live. Reached by
+         clicking a board row; #back returns to the board.
+         ========================================================== -->
+    <section id="view-detail" hidden>
+      <button id="back" type="button">← Back to board</button>
+      <div id="detail"></div>
+    </section>
+
+    <!-- ==========================================================
+         Method view: the four valuation steps, then the full
+         per-category benchmark table with quartiles.
+         ========================================================== -->
+    <section id="view-method" hidden>
+      <h2>How the implied value is built</h2>
+      <p>Each pre-token protocol's implied value comes only from the sealed snapshot's own figures — no outside prices, no hand-kept list of names:</p>
+      <ol class="method">
+        <li><b>Admit.</b> A protocol is rankable when its record shows no token at all (market cap, CoinGecko id and symbol all null) and it is not a wrapped, staked or bridged product, not a versioned pool, and not an exchange. The snapshot's 40-protocol watchlist is the floor; the same rule admits the early protocols below the $50m floor too.</li>
+        <li><b>Benchmark.</b> For each category, take the median of market-cap ÷ TVL across the live-token protocols in that category — at least 3 comparables, otherwise the global median across all live tokens. Clamp the multiple to 0.05–1.00. The table below shows every category's median, its first and third quartiles, and how many live tokens set it.</li>
+        <li><b>Implied value.</b> TVL × category multiple × (1 + 0.6 × 7-day change, clamped to −50%…+100%) × (0.70 + 0.30 × age in days capped at 1095 ÷ 1095) × (1 + 0.04 × extra chains, capped at 5). Age runs from the listing date to the snapshot date, 2026-11-14, or 365 days when no listing date is recorded.</li>
+        <li><b>Rank.</b> Sort by implied value, highest first. The board is the claim; the snapshot's record is not proof a token will ever launch.</li>
+      </ol>
+      <h3>Category benchmarks — median mcap / TVL of live tokens</h3>
+      <table id="comps">
+        <thead>
+          <tr>
+            <th>Category</th>
+            <th>Live tokens</th>
+            <th>Median</th>
+            <th>25th–75th pct</th>
+            <th>Multiple used</th>
+          </tr>
+        </thead>
+        <tbody id="compsrows"></tbody>
+      </table>
+      <p class="hint">Categories with fewer than 3 live protocols fall back to the global median, shown in the last row. The multiple is the median clamped to 0.05–1.00.</p>
+    </section>
+
+  </main>
+
+  <!-- ============================================================
+       Footer: snapshot date and the count of ranked protocols.
+       ============================================================ -->
+  <footer>
+    <p>Snapshot dated <span id="asof"></span> · <span id="footcount"></span> pre-token protocols ranked · values are the entry's own model, not a prediction that a token launches.</p>
+  </footer>
+
+  <!-- Data first, then the app that renders every view above. -->
+  <script src="../data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
